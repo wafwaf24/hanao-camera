@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Webオリジナルカメラ</title>
+    <style>
+        /* 基本的なスタイル */
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #000;
+            font-family: sans-serif;
+            display: flex;
+            flex-direction: column;
+            color: white;
+        }
+
+        /* アプリ全体のコンテナ */
+        #app-container {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: flex-end;
+            align-items: center;
+        }
+
+        /* カメラ映像とオーバーレイを重ねるコンテナ */
+        #camera-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+
+        #camera-video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover; /* 画面いっぱいに表示 */
+        }
+
+        #overlay-image {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 200px; /* 初期サイズ */
+            height: auto;
+            cursor: move;
+            user-select: none; /* テキスト選択を無効化 */
+            touch-action: none; /* スマホでのタッチ操作のため */
+        }
+
+        /* 操作UIのコンテナ */
+        #controls {
+            position: relative;
+            z-index: 10;
+            width: 100%;
+            padding-bottom: 20px;
+            background: linear-gradient(to top, rgba(0,0,0,0.8), rgba(0,0,0,0));
+            text-align: center;
+        }
+
+        /* 鼻緒を選ぶ部分 */
+        #hanao-selector {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            margin-bottom: 20px;
+            padding: 0 10px;
+            overflow-x: auto; /* 横スクロール可能に */
+        }
+
+        .hanao-option {
+            width: 60px;
+            height: 60px;
+            border: 2px solid #fff;
+            border-radius: 8px;
+            cursor: pointer;
+            object-fit: contain;
+            background-color: rgba(255, 255, 255, 0.2);
+        }
+
+        .hanao-option.selected {
+            border-color: #4CAF50; /* 選択中の色 */
+            transform: scale(1.1);
+        }
+
+        /* 撮影ボタン */
+        #shoot-button {
+            width: 70px;
+            height: 70px;
+            border-radius: 50%;
+            border: 5px solid white;
+            background-color: rgba(255, 255, 255, 0.5);
+            cursor: pointer;
+            outline: none;
+        }
+        #shoot-button:active {
+            background-color: white;
+        }
+
+        /* 撮影後のプレビュー画面 */
+        #preview-container {
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background-color: rgba(0,0,0,0.9);
+            z-index: 20;
+            display: none; /* 初期状態は非表示 */
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            gap: 20px;
+        }
+        #preview-image {
+            max-width: 90%;
+            max-height: 70%;
+            border-radius: 8px;
+        }
+        .preview-button {
+            padding: 12px 24px;
+            font-size: 16px;
+            border: 1px solid white;
+            background-color: transparent;
+            color: white;
+            border-radius: 8px;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="app-container">
+        <div id="camera-container">
+            <video id="camera-video" autoplay playsinline></video>
+            <img id="overlay-image" src="">
+        </div>
+
+        <div id="controls">
+            <div id="hanao-selector"></div>
+            <button id="shoot-button" title="撮影"></button>
+        </div>
+        
+        <div id="preview-container">
+            <img id="preview-image" src="">
+            <div>
+                <a id="download-link"><button class="preview-button">保存する</button></a>
+                <button id="back-button" class="preview-button">撮り直す</button>
+            </div>
+        </div>
+    </div>
+    
+    <canvas id="photo-canvas" style="display: none;"></canvas>
+
+    <script>
+        // --- 設定項目 ---
+        // ここに表示したい鼻緒の画像を追加・変更してください
+        // 画像はURL形式か、Base64形式のデータURIで指定します
+        const hanaoImages = [
+            { id: 'hanao1', src: 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMDAgMTAwIj48cGF0aCBkPSJNNTAsMiBDNDAsMjAgMTAsNDAgMTAsNzAgQzEwLDkwIDQwLDEwMCA1MCw5OCBDNjAsMTAwIDkwLDkwIDkwLDcwIEM5MCw0MCA2MCwyMCA1MCwyIFoiIGZpbGw9IiNmNDQzMzYiIHN0cm9rZT0iYmxhY2siIHN0cm9rZS13aWR0aD0iMiIvPjwvc3ZnPg==' },
+            { id: 'hanao2', src: 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMDAgMTAwIj48cGF0aCBkPSJNNTAsMiBDNDAsMjAgMTAsNDAgMTAsNzAgQzEwLDkwIDQwLDEwMCA1MCw5OCBDNjAsMTAwIDkwLDkwIDkwLDcwIEM5MCw0MCA2MCwyMCA1MCwyIFoiIGZpbGw9IiM0Q0FGNTAiIHN0cm9rZT0iYmxhY2siIHN0cm9rZS13aWR0aD0iMiIvPjwvc3ZnPg==' },
+            { id: 'hanao3', src: 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMDAgMTAwIj48cGF0aCBkPSJNNTAsMiBDNDAsMjAgMTAsNDAgMTAsNzAgQzEwLDkwIDQwLDEwMCA1MCw5OCBDNjAsMTAwIDkwLDkwIDkwLDcwIEM5MCw0MCA2MCwyMCA1MCwyIFoiIGZpbGw9IiMyMTk2RjMiIHN0cm9rZT0iYmxhY2siIHN0cm9rZS13aWR0aD0iMiIvPjwvc3ZnPg==' }
+        ];
+
+        // --- DOM要素の取得 ---
+        const video = document.getElementById('camera-video');
+        const overlayImage = document.getElementById('overlay-image');
+        const shootButton = document.getElementById('shoot-button');
+        const canvas = document.getElementById('photo-canvas');
+        const hanaoSelector = document.getElementById('hanao-selector');
+        const previewContainer = document.getElementById('preview-container');
+        const previewImage = document.getElementById('preview-image');
+        const downloadLink = document.getElementById('download-link');
+        const backButton = document.getElementById('back-button');
+
+        // --- カメラの初期化 ---
+        async function initCamera() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: 'environment' }, // 'user'でインカメラ、'environment'で背面カメラ
+                    audio: false
+                });
+                video.srcObject = stream;
+            } catch (err) {
+                console.error("カメラのアクセスに失敗しました: ", err);
+                alert("カメラにアクセスできませんでした。ブラウザの設定でカメラの使用を許可してください。");
+            }
+        }
+
+        // --- 鼻緒の選択UIを生成 ---
+        function createHanaoSelector() {
+            hanaoImages.forEach((imgData, index) => {
+                const img = document.createElement('img');
+                img.src = imgData.src;
+                img.dataset.id = imgData.id;
+                img.classList.add('hanao-option');
+                if (index === 0) { // 最初の画像をデフォルトで選択
+                    img.classList.add('selected');
+                    overlayImage.src = imgData.src;
+                }
+                img.addEventListener('click', () => {
+                    overlayImage.src = imgData.src;
+                    document.querySelectorAll('.hanao-option').forEach(opt => opt.classList.remove('selected'));
+                    img.classList.add('selected');
+                });
+                hanaoSelector.appendChild(img);
+            });
+        }
+        
+        // --- オーバーレイ画像の操作処理 ---
+        let isDragging = false;
+        let active = false;
+        let currentX, currentY, initialX, initialY;
+        let xOffset = 0, yOffset = 0;
+        let scale = 1.0;
+        let initialDistance = 0;
+
+        function setTranslate(xPos, yPos, el) {
+            el.style.transform = `translate3d(${xPos}px, ${yPos}px, 0) scale(${scale})`;
+        }
+
+        function dragStart(e) {
+            if (e.type === "touchstart") {
+                initialX = e.touches[0].clientX - xOffset;
+                initialY = e.touches[0].clientY - yOffset;
+            } else {
+                initialX = e.clientX - xOffset;
+                initialY = e.clientY - yOffset;
+            }
+            if (e.target === overlayImage) {
+                active = true;
+            }
+        }
+        
+        function dragEnd(e) {
+            initialX = currentX;
+            initialY = currentY;
+            active = false;
+        }
+
+        function drag(e) {
+            if (active) {
+                e.preventDefault();
+                if (e.type === "touchmove") {
+                    currentX = e.touches[0].clientX - initialX;
+                    currentY = e.touches[0].clientY - initialY;
+                } else {
+                    currentX = e.clientX - initialX;
+                    currentY = e.clientY - initialY;
+                }
+                xOffset = currentX;
+                yOffset = currentY;
+                setTranslate(currentX, currentY, overlayImage);
+            }
+        }
+
+        function getDistance(p1, p2) {
+            let dx = p1.clientX - p2.clientX;
+            let dy = p1.clientY - p2.clientY;
+            return Math.sqrt(dx * dx + dy * dy);
+        }
+
+        overlayImage.addEventListener("mousedown", dragStart, false);
+        overlayImage.addEventListener("mouseup", dragEnd, false);
+        overlayImage.addEventListener("mousemove", drag, false);
+
+        overlayImage.addEventListener("touchstart", (e) => {
+            if (e.touches.length === 1) {
+                dragStart(e);
+            } else if (e.touches.length === 2) {
+                initialDistance = getDistance(e.touches[0], e.touches[1]);
+            }
+        }, false);
+        
+        overlayImage.addEventListener("touchend", (e) => {
+             if (e.touches.length < 2) {
+                active = false;
+             }
+        }, false);
+        
+        overlayImage.addEventListener("touchmove", (e) => {
+            if (e.touches.length === 1) {
+                drag(e);
+            } else if (e.touches.length === 2 && initialDistance > 0) {
+                 e.preventDefault();
+                let newDistance = getDistance(e.touches[0], e.touches[1]);
+                scale = scale * (newDistance / initialDistance);
+                initialDistance = newDistance;
+                setTranslate(xOffset, yOffset, overlayImage);
+            }
+        }, false);
+
+        // --- 撮影処理 ---
+        shootButton.addEventListener('click', () => {
+            const videoRatio = video.videoWidth / video.videoHeight;
+            const canvasWidth = video.videoWidth;
+            const canvasHeight = video.videoHeight;
+            
+            canvas.width = canvasWidth;
+            canvas.height = canvasHeight;
+
+            const ctx = canvas.getContext('2d');
+            // 映像をCanvasに描画
+            ctx.drawImage(video, 0, 0, canvasWidth, canvasHeight);
+
+            // オーバーレイ画像をCanvasに描画
+            const overlayRect = overlayImage.getBoundingClientRect();
+            const videoRect = video.getBoundingClientRect();
+            
+            const scaleX = canvasWidth / videoRect.width;
+            const scaleY = canvasHeight / videoRect.height;
+
+            const overlayCanvasX = (overlayRect.left - videoRect.left) * scaleX;
+            const overlayCanvasY = (overlayRect.top - videoRect.top) * scaleY;
+            const overlayCanvasWidth = overlayRect.width * scaleX;
+            const overlayCanvasHeight = overlayRect.height * scaleY;
+            
+            // 画像の回転や拡縮を考慮して描画
+            ctx.save();
+            ctx.translate(overlayCanvasX + overlayCanvasWidth / 2, overlayCanvasY + overlayCanvasHeight / 2);
+            ctx.scale(scale, scale);
+            ctx.drawImage(overlayImage, -overlayCanvasWidth / 2 / scale, -overlayCanvasHeight / 2 / scale, overlayCanvasWidth/scale, overlayCanvasHeight/scale);
+            ctx.restore();
+
+            // プレビュー表示
+            const dataUrl = canvas.toDataURL('image/jpeg');
+            previewImage.src = dataUrl;
+            downloadLink.href = dataUrl;
+            downloadLink.download = `museum-photo-${Date.now()}.jpg`;
+            previewContainer.style.display = 'flex';
+        });
+
+        // --- プレビュー画面のボタン処理 ---
+        backButton.addEventListener('click', () => {
+            previewContainer.style.display = 'none';
+        });
+
+        // --- 初期化処理の実行 ---
+        window.addEventListener('load', () => {
+            initCamera();
+            createHanaoSelector();
+        });
+
+    </script>
+</body>
+</html>
